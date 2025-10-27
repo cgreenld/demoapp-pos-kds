@@ -43,45 +43,57 @@ enum FeatureFlagKey: String, CaseIterable {
     
     static var shared = FeatureFlagService()
     private var client: LDClient?
+    private var serveDitto: Bool = false // would be interesting having this set remotely in the event of an outage
     
     private init() {
         Task {
             await initializeLD()
         }
     }
-    
-    // MARK: - Initialization
+
     private func initializeLD() async {
         guard let mobileKey = Env.LAUNCH_DARKLY_MOBILE_KEY, !mobileKey.isEmpty else {
-            print("FeatureFlagService: No LAUNCH_DARKLY_MOBILE_KEY found in Env")
+            print("No LD key, trying Ditto...")
+            await loadFlagsFromDitto()
             return
         }
         
-        let config = LDConfig(mobileKey: mobileKey)
-        // Optionally configure caching, polling intervals, etc.
-        config.backgroundFlagPollingInterval = 60.0
-        config.online = true
-        
-        let context = LDContextBuilder(key: UUID().uuidString)
-            .kind("device")
-            .build()
-        
+        // Try LaunchDarkly
         do {
-            self.client = try await LDClient.start(config: config, context: context, startWaitSeconds: 5)
-            
-            // Observe flag updates
+            self.client = try await LDClient.start(config: config, context: context, startWaitSeconds: 3)
             await observeFlagChanges()
-            
-            await MainActor.run {
-                self.isConnected = true
-            }
-            
+            await MainActor.run { self.isConnected = true }
+            print("LaunchDarkly connected successfully")
         } catch {
-            print("FeatureFlagService: Initialization failed: \(error)")
-            print("Falling back to ditto flag data store for this location")
+            print("LD initialization failed: \(error)")
+            print("Falling back to Ditto...")
+            serveDitto = true
+            
+            do {
+                await loadFlagsFromDitto()
+                await MainActor.run { self.serveDitto = true }
+                print("Using Ditto fallback")
+            } catch {
+                print("Ditto fallback failed: \(error)")
+                print("Using hardcoded defaults and LaunchDarkly Retry in the Background")
+            }
         }
     }
+
+    private func loadFlagsFromDitto() async throws {
+        print("Loading flags from Ditto...")
+        let query = "SELECT * FROM COLLECTION feature_flags"
+        let result = try await dittoStore.execute(query: query)
+        
+        // Process results...
+        await MainActor.run {
+            self.enabledFeatures = Set(flags.filter { $0.value }.map { $0.key })
+        }
+        
+        print("Loaded \(flags.count) flags from Ditto")
+    }
     
+
     // MARK: - Observation
     private func observeFlagChanges() async {
         guard let client = client else { return }
@@ -101,36 +113,44 @@ enum FeatureFlagKey: String, CaseIterable {
     
     private func updateEnabledFeatures() {
         guard let client = client else { return }
+        guard serveDitto else { return }
         enabledFeatures = Set(FeatureFlagKey.allCases.filter { 
             client.boolVariation(forKey: $0.rawValue, defaultValue: false)
         })
     }
-    
+
     // MARK: - Public API
     func isEnabled(_ flagKey: FeatureFlagKey) -> Bool {
-        guard let client = client else { return false }
+        guard let serveDitto else {
+            // Fallback: check Ditto-loaded values
+            return enabledFeatures.contains(flagKey.rawValue)
+        }
         return client.boolVariation(forKey: flagKey.rawValue, defaultValue: false)
     }
     
-    func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
-        guard let client = client else { return defaultValue }
-        return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    }
+    // func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
+    //     guard let client = client else { return defaultValue }
+    //     guard serveDitto else { return }
+    //     return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
+    // }
     
-    func getInt(_ flagKey: FeatureFlagKey, defaultValue: Int) -> Int {
-        guard let client = client else { return defaultValue }
-        return client.intVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    }
+    // func getInt(_ flagKey: FeatureFlagKey, defaultValue: Int) -> Int {
+    //     guard let client = client else { return defaultValue }
+    //     guard serveDitto else { return }
+    //     return client.intVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
+    // }
     
-    func getDouble(_ flagKey: FeatureFlagKey, defaultValue: Double) -> Double {
-        guard let client = client else { return defaultValue }
-        return client.doubleVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    }
+    // func getDouble(_ flagKey: FeatureFlagKey, defaultValue: Double) -> Double {
+    //     guard let client = client else { return defaultValue }
+    //     guard serveDitto else { return }
+    //     return client.doubleVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
+    // }
     
-    func getJSON(_ flagKey: FeatureFlagKey) -> LDValue? {
-        guard let client = client else { return nil }
-        return client.jsonVariation(forKey: flagKey.rawValue, defaultValue: nil)
-    }
+    // func getJSON(_ flagKey: FeatureFlagKey) -> LDValue? {
+    //     guard let client = client else { return nil }
+    //     guard serveDitto else { return }
+    //     return client.jsonVariation(forKey: flagKey.rawValue, defaultValue: nil)
+    // }
     
     // MARK: - Context Management
     func updateContext(locationId: String, deviceType: String = "ios") {

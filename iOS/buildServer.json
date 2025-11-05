@@ -1,0 +1,19 @@
+{
+	"name": "xcode build server",
+	"version": "0.2",
+	"bspVersion": "2.0",
+	"languages": [
+		"c",
+		"cpp",
+		"objective-c",
+		"objective-cpp",
+		"swift"
+	],
+	"argv": [
+		"/opt/homebrew/bin/xcode-build-server"
+	],
+	"workspace": "/Users/connorgreen/gitwork/demoapp-pos-kds/iOS/DittoPOS.xcodeproj/project.xcworkspace",
+	"build_root": "/Users/connorgreen/Library/Developer/Xcode/DerivedData/DittoPOS-gbbccuctltsupzgjzwbncrxgoqti",
+	"scheme": "DittoPOS",
+	"kind": "xcode"
+}

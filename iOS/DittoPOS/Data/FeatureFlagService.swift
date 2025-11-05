@@ -15,6 +15,10 @@ Try LaunchDarkly (5s timeout)
         ├─ Check if Ditto has values
         ├─ If yes: Use Ditto values (from previous successful LD session)
         └─ If no: Use hardcoded defaults ← NO SEEDING HERE
+ DITTO_APP_ID=
+ DITTO_PLAYGROUND_TOKEN=
+ LAUNCH_DARKLY_MOBILE_KEY=
+ 
 */
 
 
@@ -22,6 +26,7 @@ Try LaunchDarkly (5s timeout)
 import Combine
 import LaunchDarkly
 import SwiftUI
+import DittoSwift
 
 // MARK: - FeatureFlagKeys
 enum FeatureFlagKey: String, CaseIterable {
@@ -42,6 +47,7 @@ enum FeatureFlagKey: String, CaseIterable {
     @Published private(set) var isConnected: Bool = false
     
     static var shared = FeatureFlagService()
+    private var ditto: Ditto?
     private var client: LDClient?
     private var serveDitto: Bool = false // would be interesting having this set remotely in the event of an outage
     
@@ -50,19 +56,23 @@ enum FeatureFlagKey: String, CaseIterable {
             await initializeLD()
         }
     }
+    private var contextBuilder = LDContextBuilder(key: "baseUserContext")
 
+    @MainActor
     private func initializeLD() async {
-        guard let mobileKey = Env.LAUNCH_DARKLY_MOBILE_KEY, !mobileKey.isEmpty else {
+        guard !Env.LAUNCH_DARKLY_MOBILE_KEY.isEmpty else {
             print("No LD key, trying Ditto...")
-            await loadFlagsFromDitto()
+            // try await loadFlagsFromDitto()
             return
         }
+        let config = LDConfig(mobileKey: Env.LAUNCH_DARKLY_MOBILE_KEY, autoEnvAttributes: .enabled)
+        let context = try? contextBuilder.build().get()
+
         
         // Try LaunchDarkly
         do {
-            self.client = try await LDClient.start(config: config, context: context, startWaitSeconds: 3)
-            await observeFlagChanges()
-            await MainActor.run { self.isConnected = true }
+            try await LDClient.start(config: config, context: context, startWaitSeconds: 3)
+            self.client = LDClient.get()
             print("LaunchDarkly connected successfully")
         } catch {
             print("LD initialization failed: \(error)")
@@ -70,9 +80,8 @@ enum FeatureFlagKey: String, CaseIterable {
             serveDitto = true
             
             do {
-                await loadFlagsFromDitto()
-                await MainActor.run { self.serveDitto = true }
                 print("Using Ditto fallback")
+                try await loadFlagsFromDitto()
             } catch {
                 print("Ditto fallback failed: \(error)")
                 print("Using hardcoded defaults and LaunchDarkly Retry in the Background")
@@ -81,51 +90,55 @@ enum FeatureFlagKey: String, CaseIterable {
     }
 
     private func loadFlagsFromDitto() async throws {
+        // initalize ditto
+        ditto = Ditto(
+            identity: DittoIdentity.onlinePlayground(
+                appID: "REPLACE_ME_WITH_YOUR_APP_ID",
+                token: "REPLACE_ME_WITH_YOUR_PLAYGROUND_TOKEN",
+                enableDittoCloudSync: false, // This is required to be set to false to use the correct URLs
+                customAuthURL: URL(string: "REPLACE_ME_WITH_YOUR_AUTH_URL")
+            )
+        )
+
+        guard let ditto = ditto else { return }
+
+        ditto.updateTransportConfig { transportConfig in
+            // Set the Ditto Websocket URL
+            transportConfig.connect.webSocketURLs.insert("wss://REPLACE_ME_WITH_YOUR_WEBSOCKET_URL")
+        }
+
+        // Disable DQL strict mode so that collection definitions are not required in DQL queries
+        try await ditto.store.execute(query:"ALTER SYSTEM SET DQL_STRICT_MODE = false")
+
+        do {
+            try ditto.startSync()
+        } catch {
+            print(error.localizedDescription)
+        }
+
+
+        // query flags for store
         print("Loading flags from Ditto...")
         let query = "SELECT * FROM COLLECTION feature_flags"
-        let result = try await dittoStore.execute(query: query)
-        
-        // Process results...
-        await MainActor.run {
-            self.enabledFeatures = Set(flags.filter { $0.value }.map { $0.key })
-        }
-        
-        print("Loaded \(flags.count) flags from Ditto")
+        let result = try await ditto.store.execute(query: "SELECT * FROM flags")
+        let items = result.items
+        print("Loaded \(items.count) flags from Ditto")
+
+        // format to query
+        let jsonSerializedItem: String = result.items[0].jsonString()
+        let jsonAsData: Data = Data(jsonSerializedItem.utf8)    
+
+        // TODO: transform to flags
     }
     
-
-    // MARK: - Observation
-    private func observeFlagChanges() async {
-        guard let client = client else { return }
-        
-        // Listen for flag changes
-        client.onObservable { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.updateEnabledFeatures()
-            }
-        }
-        
-        // Initial update
-        await MainActor.run {
-            self.updateEnabledFeatures()
-        }
-    }
-    
-    private func updateEnabledFeatures() {
-        guard let client = client else { return }
-        guard serveDitto else { return }
-        enabledFeatures = Set(FeatureFlagKey.allCases.filter { 
-            client.boolVariation(forKey: $0.rawValue, defaultValue: false)
-        })
-    }
-
     // MARK: - Public API
-    func isEnabled(_ flagKey: FeatureFlagKey) -> Bool {
-        guard let serveDitto else {
+    public func isEnabled(_ flagKey: FeatureFlagKey) -> Bool {
+        if serveDitto {
             // Fallback: check Ditto-loaded values
             return enabledFeatures.contains(flagKey.rawValue)
+        } else {
+            return client?.boolVariation(forKey: flagKey.rawValue, defaultValue: false) ?? false
         }
-        return client.boolVariation(forKey: flagKey.rawValue, defaultValue: false)
     }
     
     // func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
@@ -154,16 +167,9 @@ enum FeatureFlagKey: String, CaseIterable {
     
     // MARK: - Context Management
     func updateContext(locationId: String, deviceType: String = "ios") {
-        let builder = LDContextBuilder(key: UUID().uuidString)
-            .kind("device")
-            .setValue("locationId", LDValue.string(locationId))
-            .setValue("deviceType", LDValue.string(deviceType))
-        
-        if let context = builder.build() {
-            Task {
-                try? await client?.identify(context: context)
-            }
-        }
+        var contextBuilder = LDContextBuilder(key: "user-key-123abc")
+        contextBuilder.trySetValue("name", .string("Sandy"))
+        contextBuilder.trySetValue("email", .string("sandy@example.com"))
     }
     
     // MARK: - Health Check

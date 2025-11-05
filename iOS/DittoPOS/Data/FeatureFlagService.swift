@@ -62,7 +62,7 @@ enum FeatureFlagKey: String, CaseIterable {
     private func initializeLD() async {
         guard !Env.LAUNCH_DARKLY_MOBILE_KEY.isEmpty else {
             print("No LD key, trying Ditto...")
-            // try await loadFlagsFromDitto()
+            // try await loadFlagsFromDitto(), probably some questions around need at this specific point
             return
         }
         let config = LDConfig(mobileKey: Env.LAUNCH_DARKLY_MOBILE_KEY, autoEnvAttributes: .enabled)
@@ -74,6 +74,7 @@ enum FeatureFlagKey: String, CaseIterable {
             try await LDClient.start(config: config, context: context, startWaitSeconds: 3)
             self.client = LDClient.get()
             print("LaunchDarkly connected successfully")
+            // do we want to write to ditto here if successful and no flags for this store? vs big peer
         } catch {
             print("LD initialization failed: \(error)")
             print("Falling back to Ditto...")
@@ -120,7 +121,7 @@ enum FeatureFlagKey: String, CaseIterable {
         // query flags for store
         print("Loading flags from Ditto...")
         let query = "SELECT * FROM COLLECTION feature_flags"
-        let result = try await ditto.store.execute(query: "SELECT * FROM flags")
+        let result = try await ditto.store.execute(query: "SELECT * FROM flags") // any concerns around the performance here
         let items = result.items
         print("Loaded \(items.count) flags from Ditto")
 
@@ -164,7 +165,10 @@ enum FeatureFlagKey: String, CaseIterable {
     //     guard serveDitto else { return }
     //     return client.jsonVariation(forKey: flagKey.rawValue, defaultValue: nil)
     // }
-    
+
+
+
+    // TODO: Wrap as an identify call    
     // MARK: - Context Management
     func updateContext(locationId: String, deviceType: String = "ios") {
         var contextBuilder = LDContextBuilder(key: "user-key-123abc")
@@ -172,13 +176,9 @@ enum FeatureFlagKey: String, CaseIterable {
         contextBuilder.trySetValue("email", .string("sandy@example.com"))
     }
     
-    // MARK: - Health Check
+    // MARK: - utils
     func flush() {
         client?.flush()
-    }
-    
-    func setOnline(_ online: Bool) {
-        client?.setOnline(online)
     }
 }
 

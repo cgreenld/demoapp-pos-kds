@@ -9,7 +9,7 @@ Try LaunchDarkly (5s timeout)
     ├─ SUCCESS: 
     │   ├─ Use LaunchDarkly for flag values
     │   ├─ Check if Ditto is empty (first run)
-    │   └─ If yes: Seed Ditto with current LD values ← SEED HERE
+    │   └─ If yes: Seed Ditto with current LD values ← SEED HERE - do we want to do this? 
     │
     └─ FAILED/Timeout:
         ├─ Check if Ditto has values
@@ -37,6 +37,10 @@ enum FeatureFlagKey: String, CaseIterable {
     case enableRefunds = "enable-refunds"
     case showPriceBreakdown = "show-price-breakdown"
     case experimentalUI = "experimental-ui"
+
+    // test flags
+    case showDefaultView = "show-default-view"  // Boolean flag - toggles the view
+    case defaultViewNumber = "default-view-number"  // String flag - the number 1-5
 }
 
 // MARK: - FeatureFlagService
@@ -94,10 +98,10 @@ enum FeatureFlagKey: String, CaseIterable {
         // initalize ditto
         ditto = Ditto(
             identity: DittoIdentity.onlinePlayground(
-                appID: "REPLACE_ME_WITH_YOUR_APP_ID",
-                token: "REPLACE_ME_WITH_YOUR_PLAYGROUND_TOKEN",
+                appID: Env.DITTO_APP_ID,
+                token: Env.DITTO_PLAYGROUND_TOKEN,
                 enableDittoCloudSync: false, // This is required to be set to false to use the correct URLs
-                customAuthURL: URL(string: "REPLACE_ME_WITH_YOUR_AUTH_URL")
+                customAuthURL: URL(string: "Env.Ditto_CUSTOM_AUTH_URL")
             )
         )
 
@@ -105,7 +109,7 @@ enum FeatureFlagKey: String, CaseIterable {
 
         ditto.updateTransportConfig { transportConfig in
             // Set the Ditto Websocket URL
-            transportConfig.connect.webSocketURLs.insert("wss://REPLACE_ME_WITH_YOUR_WEBSOCKET_URL")
+            transportConfig.connect.webSocketURLs.insert("wss://" + Env.DITTO_WEBSOCKET_URL)
         }
 
         // Disable DQL strict mode so that collection definitions are not required in DQL queries
@@ -141,12 +145,13 @@ enum FeatureFlagKey: String, CaseIterable {
             return client?.boolVariation(forKey: flagKey.rawValue, defaultValue: false) ?? false
         }
     }
-    
-    // func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
-    //     guard let client = client else { return defaultValue }
-    //     guard serveDitto else { return }
-    //     return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    // }
+    func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
+    guard let client = client else {
+        // Fallback: return default if LD not connected
+        return defaultValue
+    }
+    return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
+    }
     
     // func getInt(_ flagKey: FeatureFlagKey, defaultValue: Int) -> Int {
     //     guard let client = client else { return defaultValue }

@@ -24,6 +24,7 @@
 		07F1B1FD2C2B690A007AB5A2 /* SettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F1B1FC2C2B690A007AB5A2 /* SettingsModel.swift */; };
 		0A6B2C4F2EBAF22A00B41B94 /* FeatureFlagService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6B2C4E2EBAF22A00B41B94 /* FeatureFlagService.swift */; };
 		0A6B2C522EBAF46200B41B94 /* LaunchDarkly in Frameworks */ = {isa = PBXBuildFile; productRef = 0A6B2C512EBAF46200B41B94 /* LaunchDarkly */; };
+		0A80AD4A2EFAFCCE007D7B30 /* DefaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A80AD492EFAFCCA007D7B30 /* DefaultView.swift */; };
 		0E1E91AD2BA0FC9300046BC0 /* LogFileConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E1E91AC2BA0FC9300046BC0 /* LogFileConfig.swift */; };
 		0E3768B82BAE2FD3009A7053 /* HeartbeatConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E3768B72BAE2FD3009A7053 /* HeartbeatConfig.swift */; };
 		112311FF2B3DBA0100A04E44 /* DittoExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112311FE2B3DBA0100A04E44 /* DittoExtensions.swift */; };
@@ -63,6 +64,7 @@
 		07F1B1FA2C2B688D007AB5A2 /* ProfileScreenViewModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ProfileScreenViewModel.swift; sourceTree = "<group>"; };
 		07F1B1FC2C2B690A007AB5A2 /* SettingsModel.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SettingsModel.swift; sourceTree = "<group>"; };
 		0A6B2C4E2EBAF22A00B41B94 /* FeatureFlagService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureFlagService.swift; sourceTree = "<group>"; };
+		0A80AD492EFAFCCA007D7B30 /* DefaultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultView.swift; sourceTree = "<group>"; };
 		0E1E91AC2BA0FC9300046BC0 /* LogFileConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogFileConfig.swift; sourceTree = "<group>"; };
 		0E3768B72BAE2FD3009A7053 /* HeartbeatConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartbeatConfig.swift; sourceTree = "<group>"; };
 		112311FE2B3DBA0100A04E44 /* DittoExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DittoExtensions.swift; sourceTree = "<group>"; };
@@ -197,6 +199,7 @@
 		14CD51AF2A2FE2D50018DE87 /* DittoPOS */ = {
 			isa = PBXGroup;
 			children = (
+				0A80AD492EFAFCCA007D7B30 /* DefaultView.swift */,
 				14CD51B02A2FE2D50018DE87 /* DittoPOS.swift */,
 				14CD51B22A2FE2D50018DE87 /* MainView.swift */,
 				14DECF042A3A6868005BC2AE /* Data */,
@@ -411,6 +414,7 @@
 				14DECF0D2A3BDC27005BC2AE /* POSView.swift in Sources */,
 				14039BEE2A465F37001903ED /* POSOrderTotalView.swift in Sources */,
 				14DECF0F2A3BDC31005BC2AE /* KDSView.swift in Sources */,
+				0A80AD4A2EFAFCCE007D7B30 /* DefaultView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

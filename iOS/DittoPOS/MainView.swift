@@ -22,6 +22,7 @@ enum TabViews: Int, Identifiable {
     @Published var mainTitle = DittoService.shared.currentLocation?.name ?? "Please Select Location"
     private var cancellables = Set<AnyCancellable>()
     private var dittoService = DittoService.shared
+    private var flagService = FeatureFlagService.shared
     
     init() {
         if Settings.locationId == nil && Settings.useDemoLocations {
@@ -85,10 +86,19 @@ enum TabViews: Int, Identifiable {
 struct MainView: View {
     @StateObject private var vm = MainVM()
     @ObservedObject var dittoService = DittoService.shared
+    @ObservedObject var flagService: FeatureFlagService = FeatureFlagService.shared
     
     var body: some View {
         NavigationStack {
             TabView(selection: $vm.selectedTab) {
+                DefaultView(number: flagService.getString(.defaultViewNumber, defaultValue: "1"))
+                    .tabItem {
+                        Label("Default", systemImage: "dot.squareshape")
+                    }
+                    .tag(TabViews.pos)
+                    .sheet(isPresented: $vm.presentCustomLocationScreen) {
+                        CustomLocationScreen()
+                    }
                 POSView()
                     .tabItem {
                         Label("POS", systemImage: "dot.squareshape")

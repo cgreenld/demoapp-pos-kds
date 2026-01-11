@@ -91,7 +91,7 @@ struct MainView: View {
     var body: some View {
         NavigationStack {
             TabView(selection: $vm.selectedTab) {
-                DefaultView(number: flagService.getString(.defaultViewNumber, defaultValue: "1"))
+                DefaultView(number: flagService.getString(.defaultViewNumber, defaultValue: "3"))
                     .tabItem {
                         Label("Default", systemImage: "dot.squareshape")
                     }

@@ -33,7 +33,8 @@ final class DittoInstance: ObservableObject {
         ditto = Ditto(identity: .onlinePlayground(
             appID: Env.DITTO_APP_ID,
             token: Env.DITTO_PLAYGROUND_TOKEN,
-            enableDittoCloudSync: false
+            enableDittoCloudSync: false,
+            customAuthURL: URL(string:Env.DITTO_AUTH_URL),
         ), persistenceDirectory: persistenceDirURL)
         
         ditto.updateTransportConfig { transportConfig in
@@ -95,10 +96,12 @@ let OrderTTL: TimeInterval = 60 * 60 * 24 //24hrs
 
     private let storeService: StoreService
     private let syncService: SyncService
+    private let flagService: FlagService
 
     private init() {
         storeService = StoreService(ditto.store)
         syncService = SyncService(ditto.sync)
+        flagService = FlagService(ditto.store)
         syncService.registerInitialSubscriptions()
 
         deviceId = String(ditto.siteID)
@@ -256,6 +259,25 @@ extension DittoService {
     }
 }
 
+// MARK: - Feature Flags (Public API)
+extension DittoService {
+    func getFeatureFlags(forStoreId storeId: String) async throws -> [FeatureFlagDocument] {
+        try await flagService.getFlagsForStore(storeId: storeId)
+    }
+    
+    func getFeatureFlag(key: String, storeId: String) async throws -> FeatureFlagDocument? {
+        try await flagService.getFlag(flagKey: key, storeId: storeId)
+    }
+    
+    func saveFeatureFlag(key: String, storeId: String, value: Any, valueType: String, source: String) async throws {
+        try await flagService.saveFlag(flagKey: key, storeId: storeId, value: value, valueType: valueType, source: source)
+    }
+    
+    func saveFeatureFlagBatch(flags: [(key: String, value: Any, valueType: String)], storeId: String, source: String) async throws {
+        try await flagService.saveFlagBatch(flags: flags, storeId: storeId, source: source)
+    }
+}
+
 // MARK: - Private
 extension DittoService {
     private func updateLocationsPublisher() {
@@ -287,6 +309,138 @@ extension DittoService {
         let location = allLocations.first { $0.id == locId }
         currentLocation = location
         currentLocationSubject.value = location
+    }
+}
+
+// MARK: - FlagService
+fileprivate struct FlagService {
+    private let store: DittoStore
+    static let collectionName = "feature_flags"
+    
+    init(_ store: DittoStore) {
+        self.store = store
+    }
+    
+    // MARK: - Read Operations
+    func getFlagsForStore(storeId: String) async throws -> [FeatureFlagDocument] {
+        let query = """
+            SELECT * FROM COLLECTION \(Self.collectionName)
+            WHERE _id.storeId = :storeId
+        """
+        
+        let result = try await store.execute(
+            query: query,
+            arguments: ["storeId": storeId]
+        )
+        
+        return result.items.compactMap { item -> FeatureFlagDocument? in
+            guard let compositeId = item.value["_id"] as? [String: String],
+                  let flagKey = compositeId["flagKey"],
+                  let storeId = compositeId["storeId"] else {
+                return nil
+            }
+            
+            return FeatureFlagDocument(
+                flagKey: flagKey,
+                storeId: storeId,
+                value: item.value["value"],
+                valueType: item.value["valueType"] as? String ?? "unknown",
+                updatedAt: item.value["updatedAt"] as? String ?? "",
+                source: item.value["source"] as? String ?? "unknown"
+            )
+        }
+    }
+
+        func getFlag(flagKey: String, storeId: String) async throws -> FeatureFlagDocument? {
+        let query = """
+            SELECT * FROM COLLECTION \(Self.collectionName)
+            WHERE _id.flagKey = :flagKey AND _id.storeId = :storeId
+        """
+        
+        let result = try await store.execute(
+            query: query,
+            arguments: ["flagKey": flagKey, "storeId": storeId]
+        )
+        
+        guard let item = result.items.first,
+              let compositeId = item.value["_id"] as? [String: String],
+              let key = compositeId["flagKey"],
+              let store = compositeId["storeId"] else {
+            return nil
+        }
+        
+        return FeatureFlagDocument(
+            flagKey: key,
+            storeId: store,
+            value: item.value["value"],
+            valueType: item.value["valueType"] as? String ?? "unknown",
+            updatedAt: item.value["updatedAt"] as? String ?? "",
+            source: item.value["source"] as? String ?? "unknown"
+        )
+    }
+
+        // MARK: - Write Operations
+    func saveFlag(flagKey: String, storeId: String, value: Any, valueType: String, source: String) async throws {
+        let compositeId: [String: String] = [
+            "flagKey": flagKey,
+            "storeId": storeId
+        ]
+        
+        let timestamp = DateFormatter.isoDate.string(from: Date())
+        
+        let doc: [String: Any] = [
+            "_id": compositeId,
+            "value": value,
+            "valueType": valueType,
+            "updatedAt": timestamp,
+            "source": source
+        ]
+        
+        let query = """
+            INSERT INTO \(Self.collectionName)
+            DOCUMENTS (:doc)
+            ON ID CONFLICT DO UPDATE
+        """
+        
+        try await store.execute(query: query, arguments: ["doc": doc])
+    }
+
+    func saveFlagBatch(flags: [(key: String, value: Any, valueType: String)], storeId: String, source: String) async throws {
+        for flag in flags {
+            try await saveFlag(
+                flagKey: flag.key,
+                storeId: storeId,
+                value: flag.value,
+                valueType: flag.valueType,
+                source: source
+            )
+        }
+    }
+}
+
+// MARK: - FeatureFlagDocument (Data Transfer Object)
+struct FeatureFlagDocument {
+    let flagKey: String
+    let storeId: String
+    let value: Any?
+    let valueType: String
+    let updatedAt: String
+    let source: String
+    
+    var boolValue: Bool? {
+        value as? Bool
+    }
+    
+    var stringValue: String? {
+        value as? String
+    }
+    
+    var intValue: Int? {
+        value as? Int
+    }
+    
+    var doubleValue: Double? {
+        value as? Double
     }
 }
 

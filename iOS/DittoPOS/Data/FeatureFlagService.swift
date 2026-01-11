@@ -44,16 +44,17 @@ enum FeatureFlagKey: String, CaseIterable {
 }
 
 // MARK: - FeatureFlagService
-@MainActor class FeatureFlagService: ObservableObject {
+@MainActor class FeatureFlagService: ObservableObject { //ditto serivce passed as an arguement into the FlagService
     private var cancellables = Set<AnyCancellable>()
     
-    @Published private(set) var enabledFeatures: Set<String> = []
     @Published private(set) var isConnected: Bool = false
     
     static var shared = FeatureFlagService()
-    private var ditto: Ditto?
+    @ObservedObject var dittoService = DittoService.shared
     private var client: LDClient?
+    private var dittoServeTestMode: Bool = true // utility to short circut LD init and serve flag from values in Ditto
     private var serveDitto: Bool = false // would be interesting having this set remotely in the event of an outage
+    @Published private(set) var flagValues: [String: FeatureFlag.FlagValue] = [:]
     
     private init() {
         Task {
@@ -64,114 +65,163 @@ enum FeatureFlagKey: String, CaseIterable {
 
     @MainActor
     private func initializeLD() async {
+        if dittoServeTestMode {
+            self.serveDitto = true
+            await self.loadFlagsFromDitto()
+            return
+        }
         guard !Env.LAUNCH_DARKLY_MOBILE_KEY.isEmpty else {
             print("No LD key, trying Ditto...")
-            // try await loadFlagsFromDitto(), probably some questions around need at this specific point
+            self.serveDitto = true
+            await self.loadFlagsFromDitto()
             return
         }
         let config = LDConfig(mobileKey: Env.LAUNCH_DARKLY_MOBILE_KEY, autoEnvAttributes: .enabled)
         let context = try? contextBuilder.build().get()
 
+        // updated try LaunchDarkly
         
-        // Try LaunchDarkly
-        do {
-            try await LDClient.start(config: config, context: context, startWaitSeconds: 3)
-            self.client = LDClient.get()
-            print("LaunchDarkly connected successfully")
-            // do we want to write to ditto here if successful and no flags for this store? vs big peer
-        } catch {
-            print("LD initialization failed: \(error)")
-            print("Falling back to Ditto...")
-            serveDitto = true
-            
-            do {
-                print("Using Ditto fallback")
-                try await loadFlagsFromDitto()
-            } catch {
-                print("Ditto fallback failed: \(error)")
-                print("Using hardcoded defaults and LaunchDarkly Retry in the Background")
+        LDClient.start(config: config, context: context, startWaitSeconds: 3) { timedOut in
+            if timedOut {
+                // Client may not have the most recent flags for the configured context
+                print("LD initialization failed")
+                print("Falling back to Ditto...")
+                Task {
+                    self.serveDitto = true
+                    await self.loadFlagsFromDitto()
+                }
+            } else {
+                // Client has received flags for the configured context
+                self.client = LDClient.get()
+                print("LaunchDarkly connected successfully")
+                Task {
+                    try? await self.writeFlagValuesToDitto()
+                }
             }
         }
-    }
-
-    private func loadFlagsFromDitto() async throws {
-        // initalize ditto
-        ditto = Ditto(
-            identity: DittoIdentity.onlinePlayground(
-                appID: Env.DITTO_APP_ID,
-                token: Env.DITTO_PLAYGROUND_TOKEN,
-                enableDittoCloudSync: false, // This is required to be set to false to use the correct URLs
-                customAuthURL: URL(string: "Env.Ditto_CUSTOM_AUTH_URL")
-            )
-        )
-
-        guard let ditto = ditto else { return }
-
-        ditto.updateTransportConfig { transportConfig in
-            // Set the Ditto Websocket URL
-            transportConfig.connect.webSocketURLs.insert("wss://" + Env.DITTO_WEBSOCKET_URL)
-        }
-
-        // Disable DQL strict mode so that collection definitions are not required in DQL queries
-        try await ditto.store.execute(query:"ALTER SYSTEM SET DQL_STRICT_MODE = false")
-
-        do {
-            try ditto.startSync()
-        } catch {
-            print(error.localizedDescription)
-        }
-
-
-        // query flags for store
-        print("Loading flags from Ditto...")
-        let query = "SELECT * FROM COLLECTION feature_flags"
-        let result = try await ditto.store.execute(query: "SELECT * FROM flags") // any concerns around the performance here
-        let items = result.items
-        print("Loaded \(items.count) flags from Ditto")
-
-        // format to query
-        let jsonSerializedItem: String = result.items[0].jsonString()
-        let jsonAsData: Data = Data(jsonSerializedItem.utf8)    
-
-        // TODO: transform to flags
     }
     
     // MARK: - Public API
     public func isEnabled(_ flagKey: FeatureFlagKey) -> Bool {
         if serveDitto {
-            // Fallback: check Ditto-loaded values
-            return enabledFeatures.contains(flagKey.rawValue)
+            // Read from flagValues
+            if let flagValue = flagValues[flagKey.rawValue],
+            case .bool(let value) = flagValue {
+                return value
+            }
+            return flagKey.defaultValue
         } else {
             return client?.boolVariation(forKey: flagKey.rawValue, defaultValue: false) ?? false
         }
     }
-    func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
-    guard let client = client else {
-        // Fallback: return default if LD not connected
-        return defaultValue
+
+    public func getString(_ flagKey: FeatureFlagKey, defaultValue: String) -> String {
+        if serveDitto {
+            // Read from flagValues
+            if let flagValue = flagValues[flagKey.rawValue],
+            case .string(let value) = flagValue {
+                return value
+            }
+            return defaultValue
+        } else {
+            guard let client = client else { return defaultValue }
+            return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
+        }
     }
-    return client.stringVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    }
-    
-    // func getInt(_ flagKey: FeatureFlagKey, defaultValue: Int) -> Int {
-    //     guard let client = client else { return defaultValue }
-    //     guard serveDitto else { return }
-    //     return client.intVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    // }
-    
-    // func getDouble(_ flagKey: FeatureFlagKey, defaultValue: Double) -> Double {
-    //     guard let client = client else { return defaultValue }
-    //     guard serveDitto else { return }
-    //     return client.doubleVariation(forKey: flagKey.rawValue, defaultValue: defaultValue)
-    // }
-    
-    // func getJSON(_ flagKey: FeatureFlagKey) -> LDValue? {
-    //     guard let client = client else { return nil }
-    //     guard serveDitto else { return }
-    //     return client.jsonVariation(forKey: flagKey.rawValue, defaultValue: nil)
-    // }
 
 
+
+    // Add a constant for default store ID
+    private let defaultStoreId = "00000"  // Hardcoded for now
+
+    // MARK: Ditto
+    func writeFlagValuesToDitto() async throws {
+        let timestamp = DateFormatter.isoDate.string(from: Date())
+        let source = "launchdarkly"
+        let storeId = defaultStoreId
+
+        guard let client = client else {
+            print("LD client not initialized, cannot write flags")
+        return
+        }
+        
+        
+        // Get all flags from LaunchDarkly
+        let ldFlags: [LDFlagKey: LDValue] = client.allFlags ?? [:]
+        
+        print("📝 Writing \(ldFlags.count) LD flags to Ditto for store: \(storeId)...")
+        
+        // Convert LDValue to batch format
+        var flagBatch: [(key: String, value: Any, valueType: String)] = []
+        
+        for (key, ldValue) in ldFlags {
+            switch ldValue {
+            case .bool(let v):
+                flagBatch.append((key: key, value: v, valueType: "bool"))
+            case .string(let v):
+                flagBatch.append((key: key, value: v, valueType: "string"))
+            case .number(let v):
+                flagBatch.append((key: key, value: v, valueType: "double"))
+            case .array, .object, .null:
+                // Skip complex types for now, or handle as JSON string
+                print("Skipping complex flag type for key: \(key)")
+                continue
+            }
+        }
+        
+        try await DittoService.shared.saveFeatureFlagBatch(
+            flags: flagBatch,
+            storeId: storeId,
+            source: source
+        )
+        print("✅ Successfully wrote flags for store: \(storeId)")
+    }
+
+    // Fix line 226 - loadFlagsFromDitto
+    private func loadFlagsFromDitto() async {
+        print("Loading flags from Ditto...")
+        
+        let storeId = defaultStoreId
+        
+        do {
+            let documents = try await DittoService.shared.getFeatureFlags(forStoreId: storeId)
+            
+            print("Loaded \(documents.count) flags from Ditto for store: \(storeId)")
+            
+            var loadedFlags: [String: FeatureFlag.FlagValue] = [:]
+            
+            for doc in documents {
+                switch doc.valueType {
+                case "bool":
+                    if let value = doc.boolValue {
+                        loadedFlags[doc.flagKey] = .bool(value)
+                    }
+                case "string":
+                    if let value = doc.stringValue {
+                        loadedFlags[doc.flagKey] = .string(value)
+                    }
+                case "int":
+                    if let value = doc.intValue {
+                        loadedFlags[doc.flagKey] = .int(value)
+                    }
+                case "double":
+                    if let value = doc.doubleValue {
+                        loadedFlags[doc.flagKey] = .double(value)
+                    }
+                default:
+                    print("Unknown value type: \(doc.valueType) for flag: \(doc.flagKey)")
+                }
+            }
+            
+            await MainActor.run {
+                self.flagValues = loadedFlags
+                print("Successfully loaded \(loadedFlags.count) flags for store: \(storeId)")
+            }
+            
+        } catch {
+            print("Failed to load flags from Ditto: \(error)")
+        }
+    }
 
     // TODO: Wrap as an identify call    
     // MARK: - Context Management
